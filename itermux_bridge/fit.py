@@ -225,6 +225,14 @@ class SizeFitter:
         try:
             await self.api.set_frame(wid, held.frame)
             for tab_id, sizes in held.grids.items():
+                # Never lay out a tab that is still zoomed: its one visible pane
+                # is the maximized one, and giving it its split size shrinks
+                # the program in it -- which iTerm2 then re-maximizes. Seen
+                # live after a failed fit: 200 -> 219 -> 98 -> 200 columns in
+                # one second, and Claude's redraw came out as a staircase of
+                # words. The split is iTerm2's to put back when it unzooms.
+                if self.api.is_zoomed(self.api.tab_by_id(tab_id)):
+                    continue
                 await self.api.set_layout(tab_id, sizes)
             await self.api.set_frame(wid, held.frame)
         finally:

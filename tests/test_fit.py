@@ -123,6 +123,10 @@ class API:
     async def variable(self, s, name, default=None):
         return self.ttys.get(s.session_id, default)
 
+    def tab_by_id(self, tab_id):
+        return next((t for w in self.windows_ for t in w.tabs
+                     if t.tab_id == tab_id), None)
+
     def is_zoomed(self, tab):
         return bool(getattr(tab, "zoomed", False))
 
@@ -313,6 +317,25 @@ be._maybe_fit(peer, pane); be.settle()
 check("failed fit: layout restored immediately, client still attached",
       be.api.restored != [] and peer.fit_window is None,
       f"({be.api.restored}, fit_window={peer.fit_window})")
+
+
+print("\n=== a failed fit while zoomed ===")
+
+# The live bug: zoom in, the fit can't reach the client's size, the layout is
+# "restored" -- onto the still-zoomed tab, shrinking its one visible pane to
+# its split size. Only the window frame may be put back while zoomed.
+a, b = Sess("a", 98, 64), Sess("b", 99, 64)
+tab = Tab("t1", [a, b])
+api = API([Window("w1", [tab])], fits=False)
+be = Backend(api)
+peer = Peer(400, 120); peer.window_mode = True
+be._maybe_fit(peer, a); be.settle()            # watching the split: recorded
+tab.sessions, tab.zoomed = [a], True           # Ctrl-B z
+a.grid_size = Grid(200, 64)
+be._maybe_fit(peer, a); be.settle()            # fit fails -> restore
+check("failed fit while zoomed: no split layout forced onto the zoomed tab",
+      api.layouts == [], f"({api.layouts})")
+check("...the window frame is still put back", api.restored != [])
 
 
 print("\n" + ("ALL CHECKS PASSED" if ok else "FAILURES ABOVE") + "\n")

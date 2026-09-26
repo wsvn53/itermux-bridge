@@ -276,6 +276,10 @@ class ITermAPI:
 
     # --- sizing -------------------------------------------------------------
 
+    def tab_by_id(self, tab_id: str):
+        return next((t for w in self.windows() for t in w.tabs
+                     if t.tab_id == tab_id), None)
+
     def window_of(self, tab):
         """The iTerm2 window holding `tab`, or None."""
         if tab is None:
