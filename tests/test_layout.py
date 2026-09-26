@@ -217,5 +217,31 @@ check("any pane lacking a frame: fall back to row counts", hs[1] > 2 * hs[0],
       f"({hs})")
 
 
+print("\n=== near-level dividers snap to one line ===")
+
+# Measured live on @0 at 200x62: the middle dividers sit at 461pt (left) and
+# 459pt (right) -- level to the eye, but rounding each column on its own drew
+# them on rows 32 and 31.
+left = Split(False, [FSess("a", 98, 12, 701, 228), FSess("b", 98, 14, 701, 233),
+                     FSess("c", 98, 12, 701, 229), FSess("d", 98, 12, 701, 229)])
+right = Split(False, [FSess("e", 99, 12, 708, 229), FSess("f", 99, 12, 708, 230),
+                      FSess("g", 99, 12, 708, 230), FSess("h", 99, 12, 708, 230)])
+regs = {r.session_id: r for r in layout.regions(Split(True, [left, right]), 200, 62)}
+check("the live @0 case: every divider on the same row in both columns",
+      [regs[x].y for x in "abcd"] == [regs[x].y for x in "efgh"],
+      f"(left {[regs[x].y for x in 'abcd']}, right {[regs[x].y for x in 'efgh']})")
+check("...columns split the width evenly",
+      abs(regs["a"].width - regs["e"].width) <= 1,
+      f"({regs['a'].width} vs {regs['e'].width})")
+check("...still no overlaps", not overlaps(list(regs.values())))
+
+# Dividers that really are rows apart must NOT be pulled together.
+left = Split(False, [FSess("a", 98, 10, 700, 200), FSess("b", 98, 30, 700, 700)])
+right = Split(False, [FSess("c", 98, 20, 700, 450), FSess("d", 98, 20, 700, 450)])
+regs = {r.session_id: r for r in layout.regions(Split(True, [left, right]), 200, 62)}
+check("dividers genuinely apart stay apart", abs(regs["b"].y - regs["d"].y) >= 5,
+      f"(left divider row {regs['b'].y}, right {regs['d'].y})")
+
+
 print("\n" + ("ALL CHECKS PASSED" if ok else "FAILURES ABOVE") + "\n")
 sys.exit(0 if ok else 1)

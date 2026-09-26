@@ -108,21 +108,83 @@ def _split(total: int, weights: List[float], gaps: int) -> List[int]:
     return sizes
 
 
+#: Dividers closer than this (in client cells) are drawn on the same line.
+#: Level dividers on the Mac can still come out a fraction of a row apart —
+#: each column quantises to its own panes' font row heights (seen live: 461pt
+#: vs 459pt, about 0.13 of a client row) — and rounding each on its own can put
+#: them on neighbouring rows when they straddle a .5.
+SNAP = 0.5
+
+
+def _snapper(values):
+    """Map each divider position to a row shared with its near neighbours."""
+    target = {}
+    group = []
+    for v in sorted(values) + [None]:
+        if group and (v is None or v - group[-1] > SNAP):
+            row = int(sum(group) / len(group) + 0.5)
+            for g in group:
+                target[g] = row
+            group = []
+        if v is not None:
+            group.append(v)
+    return lambda v: target.get(v, int(v + 0.5))
+
+
 def regions(root, cols: int, rows: int) -> List[Region]:
-    """Lay out every pane in a tab's split tree onto a cols x rows grid."""
-    out: List[Region] = []
+    """Lay out every pane in a tab's split tree onto a cols x rows grid.
+
+    Two passes. First every divider's exact (fractional) position is worked
+    out across the whole tree; then dividers that are nearly level — in any
+    split, not just the same one — are snapped to one shared row or column,
+    and panes are cut along those. Each pane keeps at least one cell and the
+    regions fill the grid exactly.
+    """
     # Points only if EVERY pane has a frame: mixing points and cells in one
     # split would compare numbers in different units.
     use_frames = all(_has_frame(leaf) for leaf in _leaves(root))
+    cuts = {}       # id(splitter) -> (vertical, [exact divider positions])
+
+    def plan(node, x: float, y: float, w: float, h: float) -> None:
+        if _is_leaf(node):
+            return
+        kids = list(node.children)
+        if not kids:
+            return
+        if len(kids) == 1:
+            plan(kids[0], x, y, w, h)
+            return
+        vertical = bool(node.vertical)
+        weights = [_weight(k, vertical, use_frames) for k in kids]
+        tw = sum(weights) or float(len(kids))
+        span = w if vertical else h
+        avail = span - (len(kids) - 1)        # one divider between each pair
+        pos = x if vertical else y
+        divs = []
+        for i, (kid, wt) in enumerate(zip(kids, weights)):
+            size = avail * wt / tw
+            if vertical:
+                plan(kid, pos, y, size, h)
+            else:
+                plan(kid, x, pos, w, size)
+            pos += size
+            if i < len(kids) - 1:
+                divs.append(pos)              # the divider occupies [pos, pos+1)
+                pos += 1
+        cuts[id(node)] = (vertical, divs)
+
+    plan(root, 0.0, 0.0, float(cols), float(rows))
+    snap = {v: _snapper([d for vv, ds in cuts.values() if vv == v for d in ds])
+            for v in (True, False)}
+
+    out: List[Region] = []
 
     def place(node, x: int, y: int, w: int, h: int) -> None:
         if w <= 0 or h <= 0:
             return
-
         if _is_leaf(node):
             out.append(Region(node.session_id, x, y, w, h))
             return
-
         kids = list(node.children)
         if not kids:
             return
@@ -130,23 +192,33 @@ def regions(root, cols: int, rows: int) -> List[Region]:
             place(kids[0], x, y, w, h)
             return
 
-        vertical = bool(node.vertical)
-        gaps = len(kids) - 1        # one divider line between each pair
-        weights = [_weight(k, vertical, use_frames) for k in kids]
-
-        if vertical:
-            # Children sit side by side; divide the WIDTH.
-            widths = _split(w, weights, gaps)
-            cx = x
-            for i, (kid, kw) in enumerate(zip(kids, widths)):
-                place(kid, cx, y, kw, h)
-                cx += kw + (1 if i < len(kids) - 1 else 0)
+        vertical, divs = cuts[id(node)]
+        start, end = (x, x + w) if vertical else (y, y + h)
+        n = len(kids)
+        if end - start < 2 * n - 1:
+            # Not even one cell per pane plus dividers: share what there is.
+            sizes = _split(end - start, [1.0] * n, n - 1)
+            edges, at = [start - 1], start
+            for sz in sizes[:-1]:
+                at += sz
+                edges.append(at)
+                at += 1
+            edges.append(end)
         else:
-            heights = _split(h, weights, gaps)
-            cy = y
-            for i, (kid, kh) in enumerate(zip(kids, heights)):
-                place(kid, x, cy, w, kh)
-                cy += kh + (1 if i < len(kids) - 1 else 0)
+            edges, prev = [start - 1], start - 1
+            for i, d in enumerate(divs):
+                lo = prev + 2                     # >= 1 cell after the last one
+                hi = end - 2 * (n - 1 - i) - 1    # room for the panes after it
+                prev = min(max(snap[vertical](d), lo), hi)
+                edges.append(prev)
+            edges.append(end)
+
+        for i, kid in enumerate(kids):
+            a, b = edges[i] + 1, edges[i + 1]
+            if vertical:
+                place(kid, a, y, b - a, h)
+            else:
+                place(kid, x, a, w, b - a)
 
     place(root, 0, 0, cols, rows)
     return out
