@@ -203,21 +203,41 @@ class SizeFitter:
             peer.fit_task = None
         self._release_window(peer)
 
-    def _release_window(self, peer) -> None:
-        """This client no longer fits its window; restore it if nobody does."""
+    def _release_window(self, peer):
+        """This client no longer fits its window; restore it if nobody does.
+
+        Returns the restore task (or None), for callers that must wait for it.
+        """
         wid, peer.fit_window = peer.fit_window, None
         held = self._held_windows().get(wid)
         if held is None:
-            return
+            return None
         held.peers.discard(peer)
         if held.peers:
             # Another client still looks at this window: let it refit to its
             # own size on its next poll, as tmux follows the latest client.
             for other in held.peers:
                 other.fit_key = None
-            return
+            return None
         del self._held_windows()[wid]
-        self._spawn(self._restore(wid, held), "restore window size")
+        return self._spawn(self._restore(wid, held), "restore window size")
+
+    async def _before_unzoom(self, peer, pane) -> None:
+        """Give the window its size back BEFORE a Ctrl-B z unzoom.
+
+        iTerm2 keeps its own exact record of a split across a zoom and applies
+        it on unzoom -- but into whatever size the window has then. Unzooming
+        while still fitted lays the split out in the fitted window, and the
+        layout API can't always get the exact split back afterwards (measured:
+        asking for 98|99 yields 98|98, and the frame then makes it 99|99).
+        Restored first, the unzoom lands in the original window, exactly.
+        """
+        tab = self.api.tab_of(pane.session_id)
+        if tab is None or not self.api.is_zoomed(tab) or peer.fit_window is None:
+            return
+        task = self._release_window(peer)
+        if task is not None:
+            await task
 
     def _restoring(self) -> set:
         if not hasattr(self, "_restoring_ids"):
@@ -240,7 +260,15 @@ class SizeFitter:
                 # live after a failed fit: 200 -> 219 -> 98 -> 200 columns in
                 # one second, and Claude's redraw came out as a staircase of
                 # words. The split is iTerm2's to put back when it unzooms.
-                if self.api.is_zoomed(self.api.tab_by_id(tab_id)):
+                tab = self.api.tab_by_id(tab_id)
+                if self.api.is_zoomed(tab):
+                    continue
+                # Already right (e.g. iTerm2 restored it on unzoom): leave it.
+                # Re-applying an exact layout is not a no-op -- the layout API
+                # can round it to something else.
+                if tab is not None and {
+                        s.session_id: (s.grid_size.width, s.grid_size.height)
+                        for s in tab.sessions} == sizes:
                     continue
                 await self.api.set_layout(tab_id, sizes)
             await self.api.set_frame(wid, held.frame)

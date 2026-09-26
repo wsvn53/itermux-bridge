@@ -85,6 +85,7 @@ class PrefixActions:
                 return          # the client's own terminal handles paste
 
             if action == "zoom":
+                await self._before_unzoom(peer, session)
                 await self.api.zoom(session)
 
             elif action == "new-window":

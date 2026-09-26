@@ -118,6 +118,12 @@ class API:
         await asyncio.sleep(0)
         self.grids.append(dict(sizes))
         self.calls.append(("grid", dict(sizes)))
+        if self.fits:                    # like iTerm2: the panes take the size
+            for w in self.windows_:
+                for tab in w.tabs:
+                    for s in tab.all_sessions:
+                        if s.session_id in sizes:
+                            s.grid_size = Grid(*sizes[s.session_id])
         return self.fits
 
     async def variable(self, s, name, default=None):
@@ -354,6 +360,43 @@ check("...on unzoom the window frame is put back", api.restored != [])
 check("...and the split put back is the pre-zoom one, never the zoomed size",
       api.layouts == [] or api.layouts[-1][1] == {"a": (98, 64), "b": (99, 64)},
       f"({api.layouts})")
+
+
+print("\n=== unzoom lands in the original window ===")
+
+# iTerm2 restores its own exact split on unzoom -- into the window's size at
+# that moment. So Ctrl-B z restores the window FIRST, then unzooms.
+a, b = Sess("a", 98, 64), Sess("b", 99, 64)
+tab = Tab("t1", [a, b])
+api = API([Window("w1", [tab])])
+be = Backend(api)
+peer = Peer(150, 40); peer.window_mode = True
+be._maybe_fit(peer, a); be.settle()             # watching: recorded
+tab.sessions, tab.zoomed = [a], True            # zoom in
+be._maybe_fit(peer, a); be.settle()             # fitted to the client
+check("zoomed: the window is held for this client", peer.fit_window == "w1")
+be.loop.run_until_complete(be._before_unzoom(peer, a))
+check("_before_unzoom restores the frame before returning",
+      api.restored != [] and peer.fit_window is None, f"({api.restored})")
+check("...without forcing a split onto the still-zoomed tab", api.layouts == [])
+
+api2 = API([Window("w1", [Tab("t1", [Sess("a", 98, 64), Sess("b", 99, 64)])])])
+be2 = Backend(api2)
+p2 = Peer(150, 40); p2.window_mode = True
+be2.loop.run_until_complete(be2._before_unzoom(p2, api2.windows_[0].tabs[0].sessions[0]))
+check("not zoomed / not fitted: _before_unzoom does nothing", api2.restored == [])
+
+# A layout that already matches is left alone: re-applying an exact layout
+# through the API can round it to something else (98|99 came back 99|99).
+a, b = Sess("a", 98, 64), Sess("b", 99, 64)
+tab = Tab("t1", [a, b])
+api = API([Window("w1", [tab])])
+be = Backend(api)
+from itermux_bridge.fit import _Held  # noqa: E402
+held = _Held("frame-of-w1", set(), {"t1": {"a": (98, 64), "b": (99, 64)}})
+be.loop.run_until_complete(be._restore("w1", held))
+check("restore skips the layout call when the split already matches",
+      api.layouts == [] and api.restored != [], f"({api.calls})")
 
 
 print("\n" + ("ALL CHECKS PASSED" if ok else "FAILURES ABOVE") + "\n")
