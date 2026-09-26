@@ -153,13 +153,22 @@ class SizeFitter:
         if await self.api.set_grid_sizes(sizes):
             log.info("fit %d pane(s) to client %dx%d", len(sizes), cols, rows)
             return
-        # Not reached (e.g. a pane deep in a split can't grow the window past
-        # the screen) -- but set_grid_size has still moved things part-way.
-        # Don't leave the user's layout half-moved until this client leaves:
-        # give it back now and fall back to cropping.
-        log.info("could not fit pane to %dx%d; restoring the layout, rows "
-                 "will be cropped", cols, rows)
-        self._release_window(peer)
+        # Not reached: the window can't grow past the screen. What that leaves
+        # behind depends on the view.
+        if len(tab.sessions) > 1:
+            # A pane inside a split: set_grid_size has moved the dividers
+            # part-way. Don't leave the layout half-moved until this client
+            # leaves: give it back now and fall back to cropping.
+            log.info("could not fit pane to %dx%d; restoring the layout, rows "
+                     "will be cropped", cols, rows)
+            self._release_window(peer)
+        else:
+            # A lone (or zoomed) pane: only the window grew, as far as the
+            # screen allows -- closer to the client than before, nothing
+            # damaged. Keep it; undoing it now would resize the program a
+            # second time for nothing.
+            log.info("fit pane as close to %dx%d as the screen allows",
+                     cols, rows)
 
     def _layout_to_restore(self, tab):
         """The split to put back when this fit ends, or None if unknown.

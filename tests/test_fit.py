@@ -308,15 +308,27 @@ check("zoom while watching: the layout from just before is restored",
       api.layouts and api.layouts[-1][1] == {"a": (60, 20), "b": (120, 20)},
       f"({api.layouts})")
 
-# A fit that can't be reached (a pane deep in a split can't grow the window
-# past the screen) has still moved things part-way: put it back right away,
-# not only when the client eventually leaves.
+# A fit that can't be reached (the window can't grow past the screen):
+# - for a pane inside a split, set_grid_size moved dividers part-way, so put
+#   the layout back right away rather than when the client eventually leaves;
+a, b = Sess("a", 60, 20), Sess("b", 120, 20)
+api = API([Window("w1", [Tab("t1", [a, b])])], fits=False)
+be = Backend(api)
+peer = Peer(300, 90)                    # pane mode on `a`, inside the split
+be._maybe_fit(peer, a); be.settle()
+check("failed fit on a pane in a split: layout restored immediately",
+      api.restored != [] and peer.fit_window is None,
+      f"({api.restored}, fit_window={peer.fit_window})")
+# - for a lone/zoomed pane only the window grew: keep it (undoing it would
+#   resize the program a second time) and restore when the client leaves.
 be, pane = rig(fits=False)
-peer = Peer(80, 24)
+peer = Peer(300, 90)
 be._maybe_fit(peer, pane); be.settle()
-check("failed fit: layout restored immediately, client still attached",
-      be.api.restored != [] and peer.fit_window is None,
+check("failed fit on a lone pane: kept, no immediate second resize",
+      be.api.restored == [] and peer.fit_window == "w1",
       f"({be.api.restored}, fit_window={peer.fit_window})")
+be._release_fit(peer); be.settle()
+check("...and restored when the client leaves", be.api.restored != [])
 
 
 print("\n=== a failed fit while zoomed ===")
@@ -335,7 +347,13 @@ a.grid_size = Grid(200, 64)
 be._maybe_fit(peer, a); be.settle()            # fit fails -> restore
 check("failed fit while zoomed: no split layout forced onto the zoomed tab",
       api.layouts == [], f"({api.layouts})")
-check("...the window frame is still put back", api.restored != [])
+tab.sessions, tab.zoomed = [a, b], False       # Ctrl-B z: unzoom
+a.grid_size = Grid(98, 64)
+be._maybe_fit(peer, a); be.settle()
+check("...on unzoom the window frame is put back", api.restored != [])
+check("...and the split put back is the pre-zoom one, never the zoomed size",
+      api.layouts == [] or api.layouts[-1][1] == {"a": (98, 64), "b": (99, 64)},
+      f"({api.layouts})")
 
 
 print("\n" + ("ALL CHECKS PASSED" if ok else "FAILURES ABOVE") + "\n")
