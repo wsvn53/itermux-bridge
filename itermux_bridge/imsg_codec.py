@@ -4,6 +4,7 @@ Wire format (struct imsg_hdr, native endian, no padding on the platforms tmux ru
 
     uint32 type
     uint32 len      total frame length INCLUDING this 16-byte header
+                    (older tmux: uint16 len + uint16 flags -- see IMSG_OLD_HASFD)
     uint32 peerid   tmux stores PROTOCOL_VERSION in the low byte (peerid & 0xff)
     uint32 pid
 
@@ -25,6 +26,18 @@ MAX_IMSGSIZE = 16384
 #:     if (hdr.len & IMSG_FD_MARK) { ibuf_fd_set(b, *fd); *fd = -1; }
 #: Miss this and every fd-bearing frame decodes as a ~2GB length and blows up.
 IMSG_FD_MARK = 0x80000000
+
+#: Older imsg (the copy bundled with tmux up to 3.5a) lays the same four bytes
+#: out differently:
+#:     uint16 len;  uint16 flags;      #define IMSGF_HASFD 1
+#: Read as one little-endian uint32 that is `len | flags << 16`, so an
+#: fd-bearing 16-byte frame arrives as 0x10010 = 65552 -- which the new-layout
+#: reading rejects as an impossible length, and a 3.5a client could not even
+#: identify itself. The two layouts never collide: a real length is at most
+#: MAX_IMSGSIZE (0x4000) and fits the low 16 bits either way, the new layout
+#: flags an fd in bit 31, the old one in bit 16. So one decoder reads both.
+IMSG_LEN_MASK = 0x0000FFFF
+IMSG_OLD_HASFD = 0x00010000
 
 # tmux 3.7b (and 3.5a) both use 8. Verified against tmux-protocol.h.
 PROTOCOL_VERSION = 8
@@ -127,11 +140,15 @@ class Decoder:
         msg_type, raw_len, peerid, pid = struct.unpack(
             HDR_FMT, bytes(self._buf[:IMSG_HEADER_SIZE])
         )
-        has_fd = bool(raw_len & IMSG_FD_MARK)
-        length = raw_len & ~IMSG_FD_MARK
+        # Either header layout (see IMSG_OLD_HASFD): the length is the low 16
+        # bits, an attached fd is bit 31 (new) or bit 16 (old).
+        has_fd = bool(raw_len & (IMSG_FD_MARK | IMSG_OLD_HASFD))
+        length = raw_len & IMSG_LEN_MASK
 
-        if length < IMSG_HEADER_SIZE or length > MAX_IMSGSIZE:
-            raise ValueError(f"invalid imsg length {length} (type={msg_type})")
+        if (raw_len & ~(IMSG_FD_MARK | IMSG_OLD_HASFD | IMSG_LEN_MASK)
+                or length < IMSG_HEADER_SIZE or length > MAX_IMSGSIZE):
+            raise ValueError(
+                f"invalid imsg length {raw_len} (type={msg_type})")
         if len(self._buf) < length:
             return None
 
