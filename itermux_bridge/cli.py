@@ -155,6 +155,25 @@ def cmd_logs(args) -> int:
     return subprocess.call(cmd)
 
 
+def _find_tmux():
+    """tmux on PATH, or in Homebrew's bin dirs.
+
+    A non-interactive SSH shell doesn't have Homebrew on PATH, so which()
+    alone reported an installed tmux as missing.
+    """
+    found = shutil.which("tmux")
+    if found:
+        return found
+    for cand in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"):
+        if os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _runtime_installed() -> bool:
+    return any(_support_dir().glob("iterm2env*"))
+
+
 def cmd_doctor(args) -> int:
     cfg = Config.load()
     ok = True
@@ -183,7 +202,7 @@ def cmd_doctor(args) -> int:
     check("iTerm2 Python API enabled", api.stdout.strip() == "1",
           "iTerm2 → Settings → General → Magic → Enable Python API")
 
-    tmux = shutil.which("tmux")
+    tmux = _find_tmux()
     check("tmux installed", bool(tmux), "brew install tmux")
     if tmux:
         ver = subprocess.run([tmux, "-V"], capture_output=True, text=True)
@@ -193,6 +212,12 @@ def cmd_doctor(args) -> int:
 
     check("installed as AutoLaunch script", SCRIPT_DIR.exists(),
           "run: itermux-bridge install")
+    # iTerm2 runs AutoLaunch scripts with its own Python runtime; without it
+    # the script is never started and nothing says why -- the bridge simply
+    # isn't there after iTerm2 launches (seen on a fresh machine).
+    check("iTerm2 Python runtime installed (needed to auto-start)",
+          _runtime_installed(),
+          "iTerm2 → Scripts → Manage → Install Python Runtime")
     check("bridge running", _socket_live(cfg.socket_path),
           "start iTerm2, or Scripts → itermux_bridge")
 
